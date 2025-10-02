@@ -2,6 +2,7 @@ import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { platform } from "process";
+import fs from "fs";
 import Database from "better-sqlite3";
 
 global.__filename = function filename(pathURL = import.meta.url, rmPrefix = platform !== "win32") {
@@ -10,7 +11,7 @@ global.__filename = function filename(pathURL = import.meta.url, rmPrefix = plat
             ? fileURLToPath(pathURL)
             : pathURL
         : pathToFileURL(pathURL).toString();
-};
+}; 
 
 global.__dirname = function dirname(pathURL) {
     return path.dirname(global.__filename(pathURL, true));
@@ -42,17 +43,71 @@ global.API = (name, path = "/", query = {}, apikeyqueryname) =>
 
 global.timestamp = { start: new Date() };
 
-const dbPath = path.join(global.__dirname(import.meta.url), "database.db");
-const sqlite = new Database(dbPath);
+// Session directory helpers
+global.getSessionFolder = function (userId) {
+    const folder = path.join(process.cwd(), "sessions", userId.toString());
+    if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+    return folder;
+};
 
-sqlite.exec(`
+// Per-session database logic
+global.getSessionDB = function (userId) {
+    const dbPath = path.join(global.getSessionFolder(userId), "database.db");
+    const sqlite = new Database(dbPath);
+    
+    sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS store (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+    `);
+    
+    class data {
+        constructor() {
+            this.data = {
+                users: {},
+                chats: {},
+                stats: {},
+                settings: {},
+                bots: {},
+            };
+        }
+        
+        read() {
+            const row = sqlite.prepare("SELECT value FROM store WHERE key = ?").get("db");
+            if (row) {
+                try {
+                    this.data = JSON.parse(row.value);
+                } catch (e) {
+                    console.error(`❌ DB parse error for session ${userId}:`, e);
+                }
+            }
+        }
+        
+        write() {
+            sqlite
+                .prepare("INSERT OR REPLACE INTO store (key, value) VALUES (?, ?)")
+                .run("db", JSON.stringify(this.data));
+        }
+    }
+    
+    const db = new data();
+    db.read();
+    return db;
+};
+
+// Legacy database for backwards compatibility
+const legacyDbPath = path.join(global.__dirname(import.meta.url), "database.db");
+const legacySqlite = new Database(legacyDbPath);
+
+legacySqlite.exec(`
 CREATE TABLE IF NOT EXISTS store (
   key TEXT PRIMARY KEY,
   value TEXT
 );
 `);
 
-class data {
+class LegacyData {
     constructor() {
         this.data = {
             users: {},
@@ -63,27 +118,28 @@ class data {
         };
     }
     read() {
-        const row = sqlite.prepare("SELECT value FROM store WHERE key = ?").get("db");
+        const row = legacySqlite.prepare("SELECT value FROM store WHERE key = ?").get("db");
         if (row) {
             try {
                 this.data = JSON.parse(row.value);
             } catch (e) {
-                console.error("❌ DB parse error:", e);
+                console.error("❌ Legacy DB parse error:", e);
             }
         }
     }
     write() {
-        sqlite
+        legacySqlite
             .prepare("INSERT OR REPLACE INTO store (key, value) VALUES (?, ?)")
             .run("db", JSON.stringify(this.data));
     }
 }
 
-const db = new data();
-db.read();
-global.db = db;
-global.loadDatabase = () => db.read();
+const legacyDb = new LegacyData();
+legacyDb.read();
+global.db = legacyDb; // Keep for backwards compatibility
+global.loadDatabase = () => legacyDb.read();
 
+// UI/UX helpers
 global.loading = async (m, conn, back = false) => {
     if (!back) {
         return conn.sendReact(m.chat, "🍥", m.key);

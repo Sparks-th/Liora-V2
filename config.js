@@ -1,4 +1,4 @@
-/*
+/* 
  * Liora WhatsApp Bot
  * @description Open source WhatsApp bot based on Node.js and Baileys.
  *

@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 import { createInterface } from "readline";
 import fs from "fs";
 import { engineCheck } from "./lib/core.js";
-
+ 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 const pkgPath = join(__dirname, "./package.json");

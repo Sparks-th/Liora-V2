@@ -628,4 +628,74 @@ We sincerely thank the following parties who have been instrumental in the devel
   </blockquote>
 </details>
 
+## Multi-Session WhatsApp Bot Architecture
+
+### Overview
+
+This WhatsApp bot now supports multiple concurrent sessions, allowing different users to manage their own WhatsApp connections through a single bot instance. The architecture uses Telegram as an onboarding interface, where users can create, manage, and monitor their WhatsApp sessions.
+
+### Key Features
+
+- **Multiple WhatsApp Sessions**: Run multiple WhatsApp accounts from a single bot instance
+- **Telegram Onboarding**: User-friendly interface for session management via Telegram
+- **Isolated Storage**: Each session gets its own folder and database
+- **Dynamic Session Management**: Create, destroy, monitor sessions without restarting the bot
+- **Backward Compatible**: Preserves compatibility with existing plugins
+
+### How It Works
+
+1. **Onboarding via Telegram**:
+   - User connects with the Telegram bot
+   - User pairs their WhatsApp number with `/pair <number>`
+   - Telegram bot provides pairing code or QR for WhatsApp connection
+
+2. **Session Management**:
+   - Each user gets a unique session folder at `/sessions/<telegram_id>/`
+   - Session data (auth, database) stored in user's folder
+   - Sessions can be monitored, managed, and destroyed through Telegram
+
+3. **Admin Controls**:
+   - View all active sessions
+   - Destroy or monitor specific sessions
+   - Check status and performance metrics
+
+### Usage (For Users)
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Start the bot and see available commands |
+| `/pair <number>` | Start pairing your WhatsApp number |
+| `/status` | Check your WhatsApp session status |
+| `/code` | Get pairing code for WhatsApp |
+| `/destroy` | Destroy your WhatsApp session |
+| `/help` | Show help message with available commands |
+
+### Usage (For Admins)
+
+| Command | Description |
+|---------|-------------|
+| `/admin_sessions` | List all active sessions |
+| `/admin_destroy <id>` | Destroy a specific session |
+
+### Configuration
+
+Set the following environment variables:
+- `TELEGRAM_BOT_TOKEN`: Your Telegram bot token
+- `TELEGRAM_ADMIN_IDS`: Comma-separated list of admin Telegram IDs
+
+### Technical Architecture
+
+The multi-session architecture is built on:
+- `sessionManager.js`: Core session management functionality
+- `telegram-bot.js`: User onboarding and Telegram integration
+- Session-specific database and storage in `/sessions/<telegram_id>/`
+- Context-aware handlers and connections
+
+### Benefits
+
+- **Resource Efficiency**: Single server hosts multiple sessions
+- **Isolation**: Each session has isolated data and errors
+- **Centralized Management**: Monitor and control all sessions from one place
+- **User Autonomy**: Users control their own sessions without admin intervention
+
 ![footer](https://capsule-render.vercel.app/api?type=waving&color=0:FFC0CB,50:FFE4E1,100:E6E6FA&height=150&section=footer)
