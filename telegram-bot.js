@@ -1,7 +1,7 @@
 import TelegramBot from "node-telegram-bot-api";
 import fs from "fs";
 import path from "path";
-import chalk, { chalkStderr } from "chalk";
+import chalk from "chalk";
 import { EventEmitter } from "events";
 import sessionManager from "./sessionManager.js";
 
@@ -51,6 +51,52 @@ const createBot = () => {
 
 const bot = createBot();
 
+// Helper function to update pairing status
+const updatePairingStatus = async (userId, session, messageId) => {
+    try {
+        // If session doesn't exist or has no connection, don't update
+        if (!session || !session.conn) return;
+        
+        // Get authentication state
+        const isAuthenticated = (
+            !!session.conn.authState?.creds?.me?.id &&
+            session.conn.user?.id &&
+            session.connectionState === "authenticated"
+        );
+        
+        if (isAuthenticated) {
+            // Get the actual device name with fallbacks
+            const deviceName = session.conn.authState?.creds?.me?.name || 
+                session.conn.user?.name || "Unknown";
+                
+            await bot.editMessageText(
+                `✅ *WhatsApp Connected Successfully!*\n\n` +
+                `Your WhatsApp is now linked with this bot.\n` +
+                `Device: ${deviceName}\n\n` +
+                `Use /status to check your connection details.`,
+                {
+                    chat_id: userId,
+                    message_id: messageId,
+                    parse_mode: "Markdown"
+                }
+            );
+            
+            // Also send a confirmation message
+            await bot.sendMessage(
+                userId,
+                `🎉 *Connection Confirmed!*\n\n` +
+                `Your WhatsApp account is now fully connected and ready to use.\n` +
+                `Device Name: ${deviceName}\n` +
+                `Status: Online & Authenticated\n\n` +
+                `You can now use the bot features through WhatsApp!`,
+                { parse_mode: "Markdown" }
+            );
+        }
+    } catch (e) {
+        console.log("Error updating pairing status:", e.message);
+    }
+};
+
 // In-memory storage for session requests and timers
 const pendingPairings = new Map(); // userId -> { number, timestamp, timer, expiryTime }
 const pairingCodeTimers = new Map(); // userId -> { timer, messageId }
@@ -59,17 +105,31 @@ const pairingCodeTimers = new Map(); // userId -> { timer, messageId }
 const MAPPING_FILE = path.join(process.cwd(), "telegram-whatsapp-mappings.json");
 let userMappings = {};
 
-// Load existing mappings
+// Load existing mappings with proper error handling
 try {
     if (fs.existsSync(MAPPING_FILE)) {
-        userMappings = JSON.parse(fs.readFileSync(MAPPING_FILE, 'utf-8'));
-        console.log(chalk.green(`📊 Loaded ${Object.keys(userMappings).length} existing Telegram-WhatsApp mappings`));
+        const fileContent = fs.readFileSync(MAPPING_FILE, 'utf-8');
+        // Only parse if there's actual content
+        if (fileContent && fileContent.trim()) {
+            userMappings = JSON.parse(fileContent);
+            console.log(chalk.green(`📊 Loaded ${Object.keys(userMappings).length} existing Telegram-WhatsApp mappings`));
+        } else {
+            // If file exists but is empty, initialize with empty object
+            fs.writeFileSync(MAPPING_FILE, JSON.stringify({}, null, 2));
+            console.log(chalk.yellow("📊 Created empty mapping file"));
+        }
+    } else {
+        // Create the file if it doesn't exist
+        fs.writeFileSync(MAPPING_FILE, JSON.stringify({}, null, 2));
+        console.log(chalk.yellow("📊 Created new mapping file"));
     }
 } catch (error) {
     console.error(chalk.red("❌ Error loading Telegram-WhatsApp mappings:"), error);
+    // Ensure we have valid mappings even after error
+    userMappings = {};
 }
 
-// Save mappings to file
+// Save mappings to file with enhanced error handling
 const saveMappings = () => {
     try {
         fs.writeFileSync(MAPPING_FILE, JSON.stringify(userMappings, null, 2));
@@ -282,25 +342,7 @@ bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
                             
                             if (finalAuthCheck) {
                                 // Connected successfully - double check the connection is fully established
-                                try {
-                                    // Get the actual device name with fallbacks
-                                    const deviceName = session.conn.authState?.creds?.me?.name || 
-                                        session.conn.user?.name || "Unknown";
-                                        
-                                    await bot.editMessageText(
-                                        `✅ *WhatsApp Connected Successfully!*\n\n` +
-                                        `Your WhatsApp is now linked with this bot.\n` +
-                                        `Device: ${deviceName}\n\n` +
-                                        `Use /status to check your connection details.`,
-                                        {
-                                            chat_id: userId,
-                                            message_id: codeMessage.message_id,
-                                            parse_mode: "Markdown"
-                                        }
-                                    );
-                                } catch (e) {
-                                    console.log("Error updating success message:", e.message);
-                                }
+                                updatePairingStatus(userId, session, codeMessage.message_id);
                             } else if (remainingSeconds <= 0) {
                                 // Code expired
                                 session.pairingCode = null;
@@ -996,6 +1038,45 @@ bot.onText(/\/admin_debug_pair (.+) (.+)/, async (msg, match) => {
         );
     }
 });
+
+// Add session state change monitoring
+sessionManager.onStateChange = async (telegramUserId, oldState, newState) => {
+    try {
+        // Get any active pairing timer for this user
+        const pairingTimer = pairingCodeTimers.get(telegramUserId);
+        
+        const session = sessionManager.getSession(telegramUserId);
+        if (!session) return; // No session exists
+        
+        // If authentication state changed to authenticated, update the message
+        if (newState === "authenticated" && oldState !== "authenticated") {
+            if (pairingTimer && pairingTimer.messageId) {
+                updatePairingStatus(telegramUserId, session, pairingTimer.messageId);
+            } else {
+                // If no active pairing timer, just send a new message
+                const deviceName = session.conn.authState?.creds?.me?.name || "Unknown";
+                bot.sendMessage(
+                    telegramUserId,
+                    `✅ *WhatsApp Connected Successfully!*\n\n` +
+                    `Your WhatsApp is now linked with this bot.\n` +
+                    `Device: ${deviceName}\n\n` +
+                    `Use /status to check your connection details.`,
+                    { parse_mode: "Markdown" }
+                );
+            }
+        } 
+        // If connection was lost after authentication
+        else if (newState === "disconnected" && oldState === "authenticated") {
+            bot.sendMessage(
+                telegramUserId,
+                `⚠️ *Connection Lost*\n\nYour WhatsApp connection was interrupted. Use /status to check current state or /reconnect to attempt reconnection.`,
+                { parse_mode: "Markdown" }
+            );
+        }
+    } catch (error) {
+        console.error(`Error in state change handler:`, error);
+    }
+};
 
 // Export the bot so it can be used in other modules
 export default bot;
